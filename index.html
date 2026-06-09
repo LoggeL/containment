@@ -1,0 +1,93 @@
+<!doctype html>
+<html lang="de">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>CONTAINMENT</title>
+  <link rel="icon" href="data:," />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Michroma&family=Red+Hat+Mono:wght@300;400;500&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="/src/styles.css" />
+</head>
+<body>
+  <div id="app"></div>
+
+  <div id="ui">
+    <!-- permanente Atmosphäre -->
+    <div class="overlay" id="vignette"></div>
+    <div class="overlay" id="grain"></div>
+    <div class="overlay" id="scanlines"></div>
+    <div class="overlay" id="fx"></div>
+
+    <!-- HUD -->
+    <div id="hud">
+      <div id="crosshair"></div>
+      <div id="threat"></div>
+
+      <div id="objective"></div>
+      <div id="countdown"></div>
+
+      <div id="vial">
+        <div id="vial-tube"><div id="vial-fill"></div></div>
+        <div class="vial-label">
+          <span class="tag">SUBSTANZ</span>
+          <span id="vial-pct">80%</span>
+        </div>
+      </div>
+
+      <div id="noise">
+        <span class="tag">GERÄUSCH</span>
+        <div class="bars">
+          <div class="bar"></div><div class="bar"></div><div class="bar"></div>
+          <div class="bar"></div><div class="bar"></div><div class="bar"></div>
+        </div>
+      </div>
+
+      <pre id="inventory"></pre>
+      <div id="subtitle"></div>
+      <div id="prompt"></div>
+    </div>
+
+    <!-- Boot / Titel -->
+    <div id="boot" class="screen visible">
+      <div class="boot-head reveal r1">BIOMED-DIREKTORAT · KOMPLEX 07 · UNTERGESCHOSS</div>
+      <h1 class="reveal r2">CONTAIN<span class="accent">MENT</span></h1>
+      <div class="boot-sub reveal r3">EINDÄMMUNGSPROTOKOLL <span class="blink">AKTIV</span></div>
+      <div class="boot-rule reveal r4"></div>
+      <div class="boot-controls reveal r5">
+        <div><b>WASD</b> bewegen · <b>SHIFT</b> rennen · <b>STRG</b> schleichen</div>
+        <div><b>E</b> benutzen · <b>F halten</b> Tür versiegeln · <b>Q</b> Fläschchen werfen</div>
+        <div class="hint">Die Substanz hält dich am Leben. Ihr Licht verrät dich.<br />Versiegelte Türen öffnen sich nie wieder — für niemanden.</div>
+      </div>
+      <div class="boot-start reveal r6">KLICKEN ZUM ERWACHEN</div>
+    </div>
+
+    <!-- Pause -->
+    <div id="pause" class="screen">
+      <h2>SIGNAL UNTERBROCHEN</h2>
+      <div class="screen-sub">klicken, um fortzufahren</div>
+    </div>
+
+    <!-- Tod -->
+    <div id="death" class="screen death">
+      <h2>EINDÄMMUNG ERFOLGREICH</h2>
+      <div class="screen-sub" id="death-cause"></div>
+      <div class="screen-quote">„Vorfall geschlossen. Es verlässt nichts den Komplex.“</div>
+      <div class="screen-stats" id="death-stats"></div>
+      <button id="death-restart">NEU BEGINNEN</button>
+    </div>
+
+    <!-- Sieg -->
+    <div id="win" class="screen win">
+      <h2>AUSBRUCH</h2>
+      <div class="screen-sub">Subjekt 23 hat den Komplex verlassen.</div>
+      <div class="screen-quote">„Eindämmung … gescheitert. Archivieren Sie alles. Wir fangen von vorn an.“</div>
+      <div class="screen-stats" id="win-stats"></div>
+      <button id="win-restart">NOCH EINMAL</button>
+    </div>
+  </div>
+
+  <script type="module" src="/src/main.ts"></script>
+</body>
+</html>
