@@ -2,6 +2,8 @@
 let ctx: AudioContext | null = null
 let master: GainNode
 let droneGain: GainNode
+let droneFilt: BiquadFilterNode | null = null
+let droneOsc2: OscillatorNode | null = null
 let weldNode: { stop: () => void } | null = null
 let alarmTimer: number | null = null
 
@@ -47,6 +49,8 @@ export function initAudio(): void {
   o1.connect(filt); o2.connect(filt)
   filt.connect(droneGain).connect(master)
   o1.start(); o2.start(); lfo.start()
+  droneFilt = filt
+  droneOsc2 = o2
   // Lüftungsrauschen
   const n = c.createBufferSource()
   n.buffer = noiseBuffer(2)
@@ -245,6 +249,68 @@ export function sfxDeath(): void {
   o.start(t)
   o.stop(t + 1.7)
   noiseBurst(1.2, 0.2, 200, 0.6)
+}
+
+/** Alarmstufe → die Grunddrohne wird unruhiger. v: 0..1 */
+export function setTension(v: number): void {
+  if (!ctx || !droneFilt || !droneOsc2 || !droneGain) return
+  const t = ctx.currentTime
+  droneFilt.frequency.linearRampToValueAtTime(110 + v * 230, t + 3)
+  droneOsc2.frequency.linearRampToValueAtTime(38.7 + v * 0.9, t + 3)
+  droneGain.gain.linearRampToValueAtTime(0.05 + v * 0.05, t + 3)
+}
+
+/** Das Gebäude arbeitet: fernes Ächzen. Rein diegetisch, KEIN NoiseEvent. */
+export function buildingGroan(): void {
+  if (!ctx) return
+  blip(46, 0.9, 0.1, 'sine')
+  noiseBurst(0.6, 0.05, 700, 6, 0.1)
+}
+
+export function farSlam(): void {
+  if (!ctx) return
+  noiseBurst(0.3, 0.12, 150, 1.2)
+  blip(40, 0.4, 0.1, 'sine', 0.05)
+}
+
+/** Verlorener rammt eine verkeilte Tür. */
+export function sfxBash(): void {
+  if (!ctx) return
+  noiseBurst(0.12, 0.2, 220, 1.5)
+  blip(48, 0.16, 0.22, 'sine')
+}
+
+export function sfxJamBreak(): void {
+  if (!ctx) return
+  noiseBurst(0.35, 0.25, 1800, 2.5)
+  noiseBurst(0.25, 0.2, 300, 1)
+  blip(60, 0.4, 0.2, 'square', 0.05)
+}
+
+export function sfxJam(): void {
+  if (!ctx) return
+  noiseBurst(0.15, 0.08, 500, 2)
+  blip(180, 0.12, 0.07, 'triangle', 0.1)
+}
+
+export function sfxBreaker(on: boolean): void {
+  if (!ctx) return
+  blip(on ? 140 : 90, 0.1, 0.14, 'square')
+  noiseBurst(0.25, 0.1, 2800, 3, 0.06) // Funken
+}
+
+/** Magnet-Clunk einer Fern-Verriegelung. */
+export function sfxLockdown(): void {
+  if (!ctx) return
+  blip(60, 0.4, 0.18, 'square')
+  noiseBurst(0.2, 0.1, 400, 1.5, 0.05)
+  blip(110, 0.15, 0.08, 'square', 0.3)
+}
+
+export function sfxTerminal(): void {
+  if (!ctx) return
+  blip(880, 0.06, 0.05, 'square')
+  blip(1320, 0.1, 0.04, 'square', 0.09)
 }
 
 export function sfxWin(): void {

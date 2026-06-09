@@ -1,18 +1,18 @@
 import * as THREE from 'three'
 import {
-  BOTTLE_TILES, ENEMY_TILES, DOORS, KEYCARD_TILE, LATE_ENEMY_TILE,
-  START_TILE, TILE, VIAL_TILES, tileToWorld, worldToTile,
+  BOTTLE_TILES, ENEMY_TILES, DOORS, KEYCARD_TILE, LATE_ENEMY_TILE, NEST_ENEMY_TILE,
+  START_TILE, TERMINALS, VIAL_TILES, tileToWorld, worldToTile,
 } from './map'
-import { buildLevel, updateFlicker } from './level'
+import { Level } from './level'
 import { DoorRegistry, Door } from './doors'
 import { Player, NoiseEvent } from './player'
-import { Enemy } from './enemies'
-import { Item, Projectile } from './items'
+import { Enemy, EnemyCtx } from './enemies'
+import { Item, Projectile, Terminal } from './items'
 import { Hud } from './hud'
 import { Director } from './director'
 import {
   initAudio, sfxDoor, sfxDenied, sfxPickup, sfxThrow, sfxDeath, sfxWin,
-  sfxHeartbeat, startWeld, stopWeld, stopAlarm,
+  sfxHeartbeat, startWeld, stopWeld, stopAlarm, sfxBreaker, sfxJam, sfxTerminal,
 } from './audio'
 
 type GameState = 'boot' | 'playing' | 'dead' | 'won'
@@ -41,7 +41,7 @@ window.addEventListener('resize', () => {
   renderer.setSize(innerWidth, innerHeight)
 })
 
-const levelFx = buildLevel(scene)
+const level = new Level(scene)
 const doors = new DoorRegistry(DOORS, scene)
 
 const glow = new THREE.PointLight(0x46ff7d, 2, 10, 2)
@@ -56,24 +56,40 @@ for (const t of VIAL_TILES) items.push(new Item('vial', t.x, t.y, scene))
 for (const t of BOTTLE_TILES) items.push(new Item('bottle', t.x, t.y, scene))
 items.push(new Item('keycard', KEYCARD_TILE.x, KEYCARD_TILE.y, scene))
 
+const terminals: Terminal[] = TERMINALS.map((t) => new Terminal(t, scene))
+
 const enemies: Enemy[] = []
 for (const t of ENEMY_TILES) enemies.push(new Enemy(t.x, t.y, scene))
+// Der Schläfer im Nest — weck ihn nicht
+enemies.push(new Enemy(NEST_ENEMY_TILE.x, NEST_ENEMY_TILE.y, scene, true))
 
 const hud = new Hud()
 const projectiles: Projectile[] = []
 let noises: NoiseEvent[] = []
-const emitNoise = (n: NoiseEvent): void => { noises.push(n) }
+let vialsTaken = 0
+let logsRead = 0
+
+const emitNoise = (n: NoiseEvent): void => {
+  noises.push(n)
+  director.noticeNoise(n)
+}
 
 let state: GameState = 'boot'
 let startTime = 0
 let sealsByPlayer = 0
 let caughtFlash = 0
 let heartbeatT = 0
+let maxThreat = 0
 
 const director = new Director(hud, doors, {
   spawnLateEnemy: () => enemies.push(new Enemy(LATE_ENEMY_TILE.x, LATE_ENEMY_TILE.y, scene)),
   onEndgame: () => {},
   onOuterOpen: () => sfxDoor(true),
+  setZonePower: (zone, on) => {
+    level.setZonePower(zone, on)
+    sfxBreaker(on)
+  },
+  emitNoise,
 })
 
 // --- Tod / Sieg --------------------------------------------------------------
@@ -85,7 +101,7 @@ function showScreen(id: string): void {
 function stats(): string {
   const secs = Math.round(performance.now() / 1000 - startTime)
   const m = Math.floor(secs / 60), s = secs % 60
-  return `ÜBERLEBT ${m}:${String(s).padStart(2, '0')} — TÜREN VERSIEGELT: ${sealsByPlayer}`
+  return `ÜBERLEBT ${m}:${String(s).padStart(2, '0')} — TÜREN VERSIEGELT: ${sealsByPlayer} — LOGBÜCHER: ${logsRead}/6`
 }
 function die(cause: 'caught' | 'collapse'): void {
   if (state !== 'playing') return
@@ -110,6 +126,10 @@ function win(): void {
   state = 'won'
   stopAlarm()
   sfxWin()
+  if (logsRead >= 6) {
+    document.querySelector('#win .screen-sub')!.textContent =
+      'Dr. Mara Voss hat den Komplex verlassen. Sie weiß wieder, wer sie war.'
+  }
   document.getElementById('win-stats')!.textContent = stats()
   setTimeout(() => {
     showScreen('win')
@@ -137,6 +157,16 @@ function nearestItem(maxDist: number): Item | null {
   }
   return best
 }
+function nearestTerminal(maxDist: number): Terminal | null {
+  let best: Terminal | null = null
+  let bd = maxDist
+  for (const t of terminals) {
+    if (t.read) continue
+    const dist = Math.hypot(t.cx - player.pos.x, t.cz - player.pos.z)
+    if (dist < bd) { bd = dist; best = t }
+  }
+  return best
+}
 
 let weldDoor: Door | null = null
 let weldProgress = 0
@@ -145,12 +175,25 @@ let fDown = false
 document.addEventListener('keydown', (e) => {
   if (state !== 'playing' || !(pointerLocked || NOLOCK)) return
   if (e.code === 'KeyE') {
+    // Priorität: Terminal → Item → Sicherung → Tür
+    const term = nearestTerminal(2.0)
+    if (term) {
+      term.read = true
+      logsRead++
+      sfxTerminal()
+      hud.say(term.spec.title, term.spec.text)
+      emitNoise({ x: term.cx, z: term.cz, radius: 7, time: performance.now() / 1000 })
+      director.notifyLog(logsRead)
+      return
+    }
     const it = nearestItem(2.0)
     if (it) {
       it.take()
       sfxPickup()
       if (it.kind === 'vial') {
         player.addStability(0.4)
+        vialsTaken++
+        director.notifyVial(vialsTaken)
         hud.say('SYSTEM', 'Stabilisator injiziert. Die Substanz leuchtet heller.')
       } else if (it.kind === 'bottle') {
         player.bottles++
@@ -158,6 +201,15 @@ document.addEventListener('keydown', (e) => {
         player.hasKeycard = true
         director.notifyKeycard()
       }
+      return
+    }
+    const br = level.breakerAt(player.pos.x, player.pos.z, 2.0)
+    if (br) {
+      const on = level.zonePower.get(br.zone) ?? true
+      level.setZonePower(br.zone, !on)
+      sfxBreaker(!on)
+      emitNoise({ x: br.cx, z: br.cz, radius: 8, time: performance.now() / 1000 })
+      if (on) director.notifyBreaker(br.zone)
       return
     }
     const d = nearestDoor(2.4)
@@ -177,6 +229,8 @@ document.addEventListener('keydown', (e) => {
           emitNoise({ x: d.cx, z: d.cz, radius: 9, time: performance.now() / 1000 })
         }
       }
+    } else if (d && !d.canInteract) {
+      sfxDenied()
     }
   }
   if (e.code === 'KeyQ' && player.bottles > 0) {
@@ -187,6 +241,25 @@ document.addEventListener('keydown', (e) => {
     const from = camera.position.clone().addScaledVector(dir, 0.4)
     projectiles.push(new Projectile(from, dir, scene))
   }
+  // Verkeilen: leise, temporär, kostet eine Flasche
+  if (e.code === 'KeyG') {
+    const d = nearestDoor(2.4)
+    if (d) {
+      if (d.jammed) {
+        d.unjam()
+        player.bottles++
+        sfxPickup()
+      } else if (d.canJam && player.bottles > 0) {
+        if (d.state === 'open') sfxDoor(false)
+        if (d.jam()) {
+          player.bottles--
+          sfxJam()
+        }
+      } else {
+        sfxDenied()
+      }
+    }
+  }
   if (e.code === 'KeyF') fDown = true
 })
 document.addEventListener('keyup', (e) => {
@@ -194,7 +267,7 @@ document.addEventListener('keyup', (e) => {
 })
 
 function canSealDoor(d: Door): boolean {
-  if (d.state === 'sealed' || d.spec.outer) return false
+  if (d.state === 'sealed' || d.spec.outer || d.jammed || d.lockdownT > 0) return false
   if (d.locked) return false
   // Das Gate nur von innen versiegeln — sonst sperrst du dich selbst aus
   if (d.spec.gate && player.pos.x < d.cx) return false
@@ -224,7 +297,7 @@ function updateWeld(dt: number): void {
       weldDoor.seal('spieler')
       sealsByPlayer++
       stopWeld(true)
-      director.notifyPlayerSeal()
+      director.notifyPlayerSeal(sealsByPlayer)
       hud.say('SYSTEM', 'Tür dauerhaft versiegelt. Kein Rückweg.')
       weldDoor = null
       fDown = false
@@ -234,19 +307,30 @@ function updateWeld(dt: number): void {
 
 function promptText(): string {
   if (weldDoor) return `VERSIEGELN … ${Math.round(weldProgress * 100)}%`
+  const term = nearestTerminal(2.0)
+  if (term) return '[E] LOGBUCH LESEN'
   const it = nearestItem(2.0)
   if (it) {
     if (it.kind === 'vial') return '[E] STABILISATOR AUFNEHMEN'
     if (it.kind === 'bottle') return '[E] FLÄSCHCHEN AUFNEHMEN'
     return '[E] SICHERHEITSKARTE NEHMEN'
   }
+  const br = level.breakerAt(player.pos.x, player.pos.z, 2.0)
+  if (br) {
+    const on = level.zonePower.get(br.zone) ?? true
+    return on ? '[E] SICHERUNG TRENNEN' : '[E] SICHERUNG SCHLIESSEN'
+  }
   const d = nearestDoor(2.4)
   if (d) {
     if (d.state === 'sealed') return d.sealedBy === 'direktive' ? '⊘ VERSIEGELT — DIREKTIVE' : '⊘ VERSIEGELT'
     if (d.spec.outer) return 'AUSSENTOR — ZENTRAL GESTEUERT'
+    if (d.lockdownT > 0) return '⊘ FERNVERRIEGELT — DIREKTIVE'
+    if (d.jammed) return 'VERKEILT   [G] KEIL ENTFERNEN'
     if (d.locked) return player.hasKeycard && d.spec.gate ? '[E] KARTE BENUTZEN' : '⊘ KARTE ERFORDERLICH'
-    const base = d.state === 'open' ? '[E] SCHLIESSEN' : '[E] ÖFFNEN'
-    return base + '   [F halten] VERSIEGELN'
+    let base = d.state === 'open' ? '[E] SCHLIESSEN' : '[E] ÖFFNEN'
+    base += '   [F halten] VERSIEGELN'
+    if (player.bottles > 0) base += '   [G] VERKEILEN'
+    return base
   }
   return ''
 }
@@ -281,7 +365,6 @@ for (const id of ['death-restart', 'win-restart']) {
 
 // --- Loop ----------------------------------------------------------------------
 const clock = new THREE.Clock()
-const noiseCheckRef = { t: -1 }
 
 function frame(): void {
   requestAnimationFrame(frame)
@@ -289,27 +372,39 @@ function frame(): void {
   const t = clock.elapsedTime
 
   if (state === 'playing' || state === 'dead') {
-    updateFlicker(levelFx.flicker, dt)
+    level.updateFlicker(dt)
     doors.update(dt)
     for (const it of items) it.update(t)
+    for (const term of terminals) term.update(t)
   }
 
   // Ohne Pointer-Lock (Pause) friert die Simulation ein
   if (state === 'playing' && (pointerLocked || NOLOCK)) {
     player.update(dt, doors, pointerLocked || NOLOCK, emitNoise)
     updateWeld(dt)
-    director.update(dt, player)
+    director.update(dt, player, maxThreat)
 
-    for (const p of projectiles) p.update(dt, emitNoise, scene)
+    for (const p of projectiles) {
+      p.update(dt, emitNoise, scene, level.lamps, (lamp) => {
+        level.killLamp(lamp)
+        director.notifyLightDestroyed()
+      })
+    }
 
-    let maxThreat = 0
+    const ctx: EnemyCtx = {
+      player,
+      doors,
+      noises,
+      lightAt: (tx, ty) => level.lightLevelAt(tx, ty),
+      alert: director.alertLevel,
+      emitNoise,
+      onSpotted: () => director.notifySpotted(),
+      onCaught: () => die('caught'),
+      convergePing: director.convergePing,
+    }
+    maxThreat = 0
     for (const en of enemies) {
-      en.update(
-        dt, player, doors, noises, noiseCheckRef,
-        () => director.notifySpotted(),
-        () => die('caught'),
-        director.convergePing,
-      )
+      en.update(dt, ctx)
       maxThreat = Math.max(maxThreat, en.threat)
     }
     noises = []
@@ -333,7 +428,11 @@ function frame(): void {
     }
 
     hud.setPrompt(promptText())
-    hud.update(dt, player.stability, player.noiseLevel, maxThreat, player.bottles, player.hasKeycard, player.dyingT)
+    hud.update(
+      dt, player.stability, player.noiseLevel, maxThreat,
+      player.bottles, player.hasKeycard, player.dyingT,
+      player.shielding, logsRead,
+    )
   }
 
   // Roter Blitz beim Gefasst-Werden

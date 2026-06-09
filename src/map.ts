@@ -18,6 +18,7 @@ export interface DoorSpec {
   axis: 'x' | 'z'
   gate?: boolean // braucht Sicherheitskarte
   outer?: boolean // Außentor der Schleuse — nur Skript öffnet
+  sign?: string // Türschild über dem Rahmen
 }
 
 interface Rect { x: number; y: number; w: number; h: number; name: string }
@@ -37,20 +38,27 @@ const ROOMS: Rect[] = [
   { x: 2, y: 25, w: 8, h: 5, name: 'sich' },
   { x: 39, y: 26, w: 4, h: 4, name: 'schleuse' },
   { x: 44, y: 26, w: 1, h: 3, name: 'exit' },
+  // dunkle Nische ohne Licht — hier schläft einer
+  { x: 31, y: 17, w: 4, h: 3, name: 'nest' },
+  // Substanzdepot: zwei Türen, fetter Loot, eine Falle
+  { x: 18, y: 25, w: 6, h: 4, name: 'depot' },
 ]
 
 export const DOORS: DoorSpec[] = [
-  { id: 'D1', tx: 10, ty: 4, axis: 'x' },
-  { id: 'D2', tx: 31, ty: 4, axis: 'x' },
-  { id: 'D3', tx: 36, ty: 9, axis: 'z' },
-  { id: 'D4', tx: 14, ty: 6, axis: 'z' },
-  { id: 'D5', tx: 13, ty: 14, axis: 'x' },
-  { id: 'D6', tx: 24, ty: 6, axis: 'z' },
-  { id: 'D7', tx: 28, ty: 19, axis: 'z' },
-  { id: 'D8', tx: 7, ty: 24, axis: 'z' },
-  { id: 'D10', tx: 6, ty: 20, axis: 'z' },
-  { id: 'GATE', tx: 38, ty: 27, axis: 'x', gate: true },
-  { id: 'OUTER', tx: 43, ty: 27, axis: 'x', outer: true },
+  { id: 'D1', tx: 10, ty: 4, axis: 'x', sign: 'STATION 4' },
+  { id: 'D2', tx: 31, ty: 4, axis: 'x', sign: 'LABOR A' },
+  { id: 'D3', tx: 36, ty: 9, axis: 'z', sign: 'OST-TRAKT' },
+  { id: 'D4', tx: 14, ty: 6, axis: 'z', sign: 'WEST-TRAKT' },
+  { id: 'D5', tx: 13, ty: 14, axis: 'x', sign: 'KANTINE' },
+  { id: 'D6', tx: 24, ty: 6, axis: 'z', sign: 'LAGER' },
+  { id: 'D7', tx: 28, ty: 19, axis: 'z', sign: 'SÜD-TRAKT' },
+  { id: 'D8', tx: 7, ty: 24, axis: 'z', sign: 'SICHERHEIT' },
+  { id: 'D10', tx: 6, ty: 20, axis: 'z', sign: 'KANTINE' },
+  { id: 'D11', tx: 20, ty: 24, axis: 'z', sign: 'DEPOT' },
+  { id: 'D12', tx: 23, ty: 24, axis: 'z', sign: 'DEPOT' },
+  { id: 'D13', tx: 35, ty: 18, axis: 'x' }, // Nest — kein Schild. Absicht.
+  { id: 'GATE', tx: 38, ty: 27, axis: 'x', gate: true, sign: 'SCHLEUSE' },
+  { id: 'OUTER', tx: 43, ty: 27, axis: 'x', outer: true, sign: 'AUSGANG' },
 ]
 
 export const START_TILE = { x: 5, y: 5 }
@@ -59,30 +67,61 @@ export const EXIT_TILES = [{ x: 44, y: 26 }, { x: 44, y: 27 }, { x: 44, y: 28 }]
 export const VIAL_TILES = [
   { x: 3, y: 3 }, { x: 40, y: 3 }, { x: 22, y: 12 },
   { x: 3, y: 17 }, { x: 37, y: 25 }, { x: 8, y: 28 },
+  { x: 32, y: 18 }, { x: 33, y: 19 }, // Nest
+  { x: 19, y: 27 }, { x: 22, y: 26 }, // Depot
 ]
 export const BOTTLE_TILES = [
   { x: 26, y: 13 }, { x: 21, y: 14 }, { x: 9, y: 13 },
   { x: 34, y: 7 }, { x: 20, y: 23 }, { x: 3, y: 28 },
+  { x: 21, y: 28 }, // Depot
 ]
 export const KEYCARD_TILE = { x: 4, y: 27 }
 export const ENEMY_TILES = [
   { x: 38, y: 5 }, { x: 8, y: 16 }, { x: 30, y: 23 },
 ]
 export const LATE_ENEMY_TILE = { x: 36, y: 20 }
+export const NEST_ENEMY_TILE = { x: 32, y: 17 }
+export const DEPOT_RECT = { x: 18, y: 25, w: 6, h: 4 }
+export const DEPOT_DOOR_IDS = ['D11', 'D12']
 
-export interface LightSpec { tx: number; ty: number; flicker?: boolean; shadow?: boolean; warm?: boolean }
+export interface LightSpec { tx: number; ty: number; zone: string; flicker?: boolean; shadow?: boolean; warm?: boolean }
 export const LIGHTS: LightSpec[] = [
-  { tx: 5, ty: 5, flicker: true, shadow: true }, // OP-Lampe
-  { tx: 14, ty: 4 }, { tx: 21, ty: 5 }, { tx: 28, ty: 4 },
-  { tx: 35, ty: 5, shadow: true }, { tx: 40, ty: 4, flicker: true },
-  { tx: 14, ty: 10 }, { tx: 15, ty: 16 }, { tx: 14, ty: 20 },
-  { tx: 5, ty: 15 }, { tx: 10, ty: 14 },
-  { tx: 24, ty: 12, flicker: true, shadow: true },
-  { tx: 10, ty: 22 }, { tx: 18, ty: 23 }, { tx: 26, ty: 22 }, { tx: 33, ty: 23 },
-  { tx: 36, ty: 13 }, { tx: 37, ty: 19, flicker: true }, { tx: 36, ty: 26 },
-  { tx: 5, ty: 27 },
-  { tx: 40, ty: 27, shadow: true },
-  { tx: 44, ty: 27, warm: true },
+  { tx: 5, ty: 5, zone: 'nord', flicker: true, shadow: true }, // OP-Lampe
+  { tx: 14, ty: 4, zone: 'nord' }, { tx: 21, ty: 5, zone: 'nord' }, { tx: 28, ty: 4, zone: 'nord' },
+  { tx: 35, ty: 5, zone: 'nord', shadow: true }, { tx: 40, ty: 4, zone: 'nord', flicker: true },
+  { tx: 14, ty: 10, zone: 'west' }, { tx: 15, ty: 16, zone: 'west' }, { tx: 14, ty: 20, zone: 'west' },
+  { tx: 5, ty: 15, zone: 'west' }, { tx: 10, ty: 14, zone: 'west' },
+  { tx: 24, ty: 12, zone: 'mitte', flicker: true, shadow: true },
+  { tx: 10, ty: 22, zone: 'mitte' }, { tx: 18, ty: 23, zone: 'mitte' }, { tx: 26, ty: 22, zone: 'mitte' }, { tx: 33, ty: 23, zone: 'mitte' },
+  { tx: 36, ty: 13, zone: 'ost' }, { tx: 37, ty: 19, zone: 'ost', flicker: true }, { tx: 36, ty: 26, zone: 'ost' },
+  { tx: 5, ty: 27, zone: 'mitte' },
+  { tx: 40, ty: 27, zone: 'ost', shadow: true },
+  { tx: 44, ty: 27, zone: 'exit', warm: true }, // kein Breaker — der Ausgang leuchtet immer
+]
+
+/** Sicherungskästen: [E] schaltet eine Lichtzone ab. Die Direktorin schaltet zurück. */
+export interface BreakerSpec { tx: number; ty: number; zone: string }
+export const BREAKERS: BreakerSpec[] = [
+  { tx: 33, ty: 2, zone: 'nord' }, // Labor A
+  { tx: 2, ty: 16, zone: 'west' }, // Kantine
+  { tx: 29, ty: 12, zone: 'mitte' }, // Lager
+  { tx: 37, ty: 29, zone: 'ost' }, // Korridor Ost, Südende
+]
+
+/** Lore-Terminale: Wer Subjekt 23 war. Auslesen piept — Lesen ist ein Risiko. */
+export interface TerminalSpec { tx: number; ty: number; title: string; text: string }
+export const TERMINALS: TerminalSpec[] = [
+  { tx: 3, ty: 7, title: 'LOGBUCH 01/06', text: 'Aufnahmeprotokoll: Subjekt 23, weiblich, Verfahrenskenntnis: vollständig. Anmerkung der Direktorin: Ausgerechnet sie.' },
+  { tx: 41, ty: 2, title: 'LOGBUCH 02/06', text: 'Charge 7 zeigt Photophobie-Inversion. Die Substanz zieht sie an wie Motten. Dr. V. nennt das einen Erfolg.' },
+  { tx: 2, ty: 13, title: 'LOGBUCH 03/06', text: 'Kantinen-Aushang: Subjekte 1 bis 22 gelten als verlegt. Fragen Sie nicht, wohin. Fragen Sie nie, wohin.' },
+  { tx: 28, ty: 10, title: 'LOGBUCH 04/06', text: 'Inventur: Stabilisator wird nicht synthetisiert. Er wird GEWONNEN. Quellmaterial: siehe Subjektliste.' },
+  { tx: 2, ty: 26, title: 'LOGBUCH 05/06', text: 'Sicherheitsvermerk: Dr. Mara Voss hat Einspruch gegen Phase 3 eingelegt. Einspruch abgelehnt. Dr. Voss wird Subjekt 23.' },
+  { tx: 37, ty: 12, title: 'LOGBUCH 06/06', text: 'Letzte Direktive: Das Verfahren von Dr. Voss bleibt im Haus. Die Erfinderin auch. Eindämmung ist Verantwortung.' },
+]
+
+/** Abgewetzte Evak-Leitlinie am Boden: Sollweg zur Schleuse (Tile-Wegpunkte). */
+export const EVAK_LINE = [
+  { x: 11, y: 4 }, { x: 36, y: 4 }, { x: 36, y: 27 }, { x: 43, y: 27 },
 ]
 
 // ---------------------------------------------------------------------------

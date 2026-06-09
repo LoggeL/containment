@@ -19,6 +19,7 @@ export class Hud {
   private threatEl = $('threat')
   private fx = $('fx')
   private countdown = $('countdown')
+  private alertEl = $('alert')
 
   private subQueue: SubLine[] = []
   private subActive: SubLine | null = null
@@ -29,7 +30,19 @@ export class Hud {
   private lastObjective = ''
 
   say(speaker: string, text: string): void {
+    // Stau vermeiden: älteste wartende Zeile fliegt raus
+    if (this.subQueue.length >= 2) this.subQueue.shift()
     this.subQueue.push({ speaker, text })
+  }
+
+  setAlert(level: number): void {
+    if (level <= 0) {
+      this.alertEl.style.opacity = '0'
+      return
+    }
+    this.alertEl.style.opacity = '1'
+    this.alertEl.textContent = 'ALARMSTUFE ' + ['', 'I', 'II', 'III'][level]
+    this.alertEl.className = 'lvl' + level
   }
 
   setObjective(t: string): void {
@@ -53,11 +66,16 @@ export class Hud {
     this.countdown.style.opacity = t ? '1' : '0'
   }
 
-  update(dt: number, stability: number, noise: number, threat: number, bottles: number, keycard: boolean, dying: number): void {
+  update(
+    dt: number, stability: number, noise: number, threat: number,
+    bottles: number, keycard: boolean, dying: number,
+    shielding: boolean, logs: number,
+  ): void {
     const pct = Math.round(stability * 100)
     this.vialFill.style.height = pct + '%'
     this.vialPct.textContent = pct + '%'
     this.vialFill.classList.toggle('low', stability < 0.25)
+    this.vialFill.classList.toggle('shielded', shielding)
 
     const litBars = Math.round(noise * this.noiseBars.length)
     this.noiseBars.forEach((b, i) => b.classList.toggle('on', i < litBars))
@@ -66,8 +84,10 @@ export class Hud {
     this.threatEl.classList.toggle('hot', threat >= 1)
 
     let invText = ''
-    if (bottles > 0) invText += '⌀ Fläschchen ×' + bottles + '   [Q] werfen'
+    if (shielding) invText += '◖ ABGESCHIRMT ◗'
+    if (bottles > 0) invText += (invText ? '\n' : '') + '⌀ Fläschchen ×' + bottles + '   [Q] werfen  [G] verkeilen'
     if (keycard) invText += (invText ? '\n' : '') + '▮ Sicherheitskarte'
+    if (logs > 0) invText += (invText ? '\n' : '') + '▤ Logbücher ' + logs + '/6'
     this.inv.textContent = invText
 
     // Sterben: grünes Pulsieren + Verdunkelung

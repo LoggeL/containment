@@ -22,10 +22,16 @@ export class Player {
   crouching = false
   running = false
   moving = false
+  shielding = false // [V]: Glühen abschirmen — kostet Stabilität
   noiseLevel = 0 // 0..1 für HUD + KI
   bottles = 1
   hasKeycard = false
   dead = false
+
+  /** Wie hell der Spieler nach außen leuchtet — das sehen die Verlorenen. */
+  get lightOutput(): number {
+    return this.stability * (this.shielding ? 0.12 : 1)
+  }
 
   private vel = new THREE.Vector3()
   private bobT = 0
@@ -90,7 +96,8 @@ export class Player {
   update(dt: number, doors: DoorRegistry, locked: boolean, emitNoise: (n: NoiseEvent) => void): void {
     if (this.dead) return
     this.crouching = this.crouchToggle
-    this.running = (this.keys.has('ShiftLeft') || this.keys.has('ShiftRight')) && !this.crouching
+    this.shielding = this.keys.has('KeyV') && this.stability > 0.02
+    this.running = (this.keys.has('ShiftLeft') || this.keys.has('ShiftRight')) && !this.crouching && !this.shielding
 
     let ix = 0, iz = 0
     if (locked) {
@@ -99,7 +106,8 @@ export class Player {
       if (this.keys.has('KeyA')) ix -= 1
       if (this.keys.has('KeyD')) ix += 1
     }
-    const speed = this.crouching ? 1.5 : this.running ? 5.2 : 3.1
+    // Abschirmen: beide Hände an der Phiole — nur Schleichtempo
+    const speed = this.crouching || this.shielding ? 1.5 : this.running ? 5.2 : 3.1
     const len = Math.hypot(ix, iz)
     let wish = new THREE.Vector3()
     if (len > 0) {
@@ -130,8 +138,9 @@ export class Player {
       sfxStep(this.running, this.crouching)
     }
 
-    // Stabilität
-    this.stability = Math.max(0, this.stability - dt * 0.0045)
+    // Stabilität — Abschirmen presst die Substanz zusammen, sie verbrennt schneller
+    const drain = 0.0045 + (this.shielding ? 0.022 : 0)
+    this.stability = Math.max(0, this.stability - dt * drain)
     if (this.stability <= 0) {
       this.dyingT += dt
     } else {
@@ -149,8 +158,9 @@ export class Player {
 
     // Substanz-Glühen — dein Licht, dein Verräter
     this.glow.position.set(this.pos.x, eye - 0.25, this.pos.z)
-    this.glow.intensity = 1.4 + this.stability * 11
-    this.glow.distance = 7 + this.stability * 8
+    const shieldMul = this.shielding ? 0.12 : 1
+    this.glow.intensity = (1.4 + this.stability * 11) * shieldMul
+    this.glow.distance = this.shielding ? 2.5 : 7 + this.stability * 8
   }
 
   addStability(v: number): void {

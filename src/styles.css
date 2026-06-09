@@ -95,6 +95,17 @@ html, body {
   100% { color: var(--ink); }
 }
 
+#alert {
+  position: absolute; top: 56px; left: 30px;
+  font-size: 11px; letter-spacing: 0.3em;
+  padding-left: 12px;
+  opacity: 0;
+  transition: opacity 0.5s;
+}
+#alert.lvl1 { color: var(--amber); border-left: 2px solid var(--amber); }
+#alert.lvl2 { color: #ff7a3a; border-left: 2px solid #ff7a3a; animation: blink-soft 2.2s infinite; }
+#alert.lvl3 { color: var(--red); border-left: 2px solid var(--red); animation: blink-soft 1s infinite; }
+
 #countdown {
   position: absolute; top: 26px; left: 50%; transform: translateX(-50%);
   font-family: var(--display);
@@ -127,6 +138,7 @@ html, body {
   animation: vial-glow 2.6s ease-in-out infinite;
 }
 #vial-fill.low { animation: vial-panic 0.7s infinite; }
+#vial-fill.shielded { filter: brightness(0.35) saturate(0.6); animation: none; }
 @keyframes vial-glow {
   0%, 100% { filter: brightness(1); }
   50% { filter: brightness(1.35); }

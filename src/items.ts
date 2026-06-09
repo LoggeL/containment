@@ -1,6 +1,7 @@
 import * as THREE from 'three'
-import { Cell, TILE, cellAt, tileToWorld, worldToTile } from './map'
+import { Cell, TILE, TerminalSpec, WALL_H, cellAt, tileToWorld, worldToTile } from './map'
 import { NoiseEvent } from './player'
+import { Lamp } from './level'
 import { sfxClink } from './audio'
 
 export type ItemKind = 'vial' | 'bottle' | 'keycard'
@@ -80,7 +81,7 @@ export class Item {
   }
 }
 
-/** Geworfene Flasche — simple Ballistik, Lärm beim Aufprall. */
+/** Geworfene Flasche — simple Ballistik, Lärm beim Aufprall. Trifft auch Lampen. */
 export class Projectile {
   mesh: THREE.Mesh
   vel: THREE.Vector3
@@ -92,24 +93,80 @@ export class Projectile {
       new THREE.MeshStandardMaterial({ color: 0x6a7a72, roughness: 0.2 }),
     )
     this.mesh.position.copy(pos)
-    this.vel = dir.clone().multiplyScalar(10)
-    this.vel.y += 2.4
+    this.vel = dir.clone().multiplyScalar(11)
+    this.vel.y += 2.0
     scene.add(this.mesh)
   }
 
-  update(dt: number, emitNoise: (n: NoiseEvent) => void, scene: THREE.Scene): void {
+  update(
+    dt: number,
+    emitNoise: (n: NoiseEvent) => void,
+    scene: THREE.Scene,
+    lamps: Lamp[],
+    onLampHit: (l: Lamp) => void,
+  ): void {
     if (this.done) return
     this.vel.y -= 13 * dt
     this.mesh.position.addScaledVector(this.vel, dt)
     this.mesh.rotation.x += dt * 9
     const p = this.mesh.position
+    // Lampen-Treffer: Dunkelheit gegen Lärm, für immer
+    for (const l of lamps) {
+      if (!l.alive) continue
+      const lp = l.light.position
+      if (Math.abs(p.x - lp.x) < 0.9 && Math.abs(p.z - lp.z) < 0.9 && p.y > lp.y - 0.5) {
+        this.done = true
+        scene.remove(this.mesh)
+        onLampHit(l)
+        sfxClink()
+        emitNoise({ x: lp.x, z: lp.z, radius: 15, time: performance.now() / 1000 })
+        return
+      }
+    }
     const t = worldToTile(p.x, p.z)
     const hitWall = cellAt(t.x, t.y) === Cell.Wall
-    if (hitWall || p.y <= 0.08) {
+    if (hitWall || p.y <= 0.08 || p.y > WALL_H + 0.5) {
       this.done = true
       scene.remove(this.mesh)
       sfxClink()
       emitNoise({ x: p.x, z: p.z, radius: 17, time: performance.now() / 1000 })
     }
+  }
+}
+
+/** Wand-Terminal mit Logbuch-Eintrag. Lesen piept — Lesen ist ein Risiko. */
+export class Terminal {
+  spec: TerminalSpec
+  read = false
+  cx: number
+  cz: number
+  private screen: THREE.MeshStandardMaterial
+
+  constructor(spec: TerminalSpec, scene: THREE.Scene) {
+    this.spec = spec
+    const { x, z } = tileToWorld(spec.tx, spec.ty)
+    // an die nächstgelegene Wand setzen
+    const dirs = [[1, 0], [-1, 0], [0, 1], [0, -1]]
+    let off = { x: 0, z: 1 }
+    for (const [dx, dy] of dirs) {
+      if (cellAt(spec.tx + dx, spec.ty + dy) === Cell.Wall) { off = { x: dx, z: dy }; break }
+    }
+    this.cx = x + off.x * (TILE / 2 - 0.2)
+    this.cz = z + off.z * (TILE / 2 - 0.2)
+    const body = new THREE.Mesh(
+      new THREE.BoxGeometry(0.6, 0.45, 0.12),
+      new THREE.MeshStandardMaterial({ color: 0x2c3338, roughness: 0.5, metalness: 0.5 }),
+    )
+    body.position.set(this.cx, 1.45, this.cz)
+    body.rotation.y = Math.atan2(-off.x, -off.z)
+    this.screen = new THREE.MeshStandardMaterial({ color: 0x05140b, emissive: 0x2fae62, emissiveIntensity: 0.9 })
+    const scr = new THREE.Mesh(new THREE.PlaneGeometry(0.48, 0.32), this.screen)
+    scr.position.set(this.cx - off.x * 0.08, 1.45, this.cz - off.z * 0.08)
+    scr.rotation.y = Math.atan2(-off.x, -off.z)
+    scene.add(body, scr)
+  }
+
+  update(t: number): void {
+    this.screen.emissiveIntensity = this.read ? 0.25 : 0.7 + Math.sin(t * 2.4) * 0.25
   }
 }

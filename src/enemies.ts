@@ -1,11 +1,26 @@
 import * as THREE from 'three'
-import { Cell, TILE, cellAt, findPath, losClear, randomFloorNear, tileToWorld, worldToTile } from './map'
+import { Cell, cellAt, findPath, losClear, randomFloorNear, tileToWorld, worldToTile } from './map'
 import { DoorRegistry } from './doors'
 import { Player, NoiseEvent } from './player'
 import { mulberry } from './level'
-import { sfxSting } from './audio'
+import { sfxSting, sfxBash, sfxJamBreak } from './audio'
 
 type AIState = 'patrol' | 'investigate' | 'chase'
+
+/** Pro Frame gebauter Kontext für alle Verlorenen. */
+export interface EnemyCtx {
+  player: Player
+  doors: DoorRegistry
+  noises: NoiseEvent[]
+  /** Umgebungslicht 0..1 am Tile — Dunkelheit verkürzt ihre Sicht */
+  lightAt: (tx: number, ty: number) => number
+  /** Alarmstufe 0..3 der Direktorin — macht Patrouillen schneller und weiter */
+  alert: number
+  emitNoise: (n: NoiseEvent) => void
+  onSpotted: () => void
+  onCaught: () => void
+  convergePing: THREE.Vector3 | null
+}
 
 function veinTexture(seed: number): THREE.CanvasTexture {
   const c = document.createElement('canvas')
@@ -41,6 +56,8 @@ export class Enemy {
   heading = 0
   state: AIState = 'patrol'
   alive = true
+  /** schläft im Nest, bis Licht/Lärm/Nähe ihn weckt */
+  dormant: boolean
 
   private path: { x: number; y: number }[] = []
   private pathI = 0
@@ -52,12 +69,14 @@ export class Enemy {
   private loseT = 0
   private noiseTarget: { x: number; z: number } | null = null
   private animT = 0
+  private bashSfxT = 0
   private rng: () => number
   private bodyMat: THREE.MeshStandardMaterial
   private parts: { lArm: THREE.Object3D; rArm: THREE.Object3D; lLeg: THREE.Object3D; rLeg: THREE.Object3D; torso: THREE.Object3D; head: THREE.Object3D }
 
-  constructor(tx: number, ty: number, scene: THREE.Scene) {
+  constructor(tx: number, ty: number, scene: THREE.Scene, dormant = false) {
     const id = enemyCounter++
+    this.dormant = dormant
     this.rng = mulberry(900 + id * 37)
     const { x, z } = tileToWorld(tx, ty)
     this.pos = new THREE.Vector3(x, 0, z)
@@ -77,7 +96,6 @@ export class Enemy {
       this.group.add(pivot)
       return pivot
     }
-    // Torso hängt nicht — direkt platziert
     const torso = new THREE.Group()
     const tm = new THREE.Mesh(new THREE.BoxGeometry(0.52, 0.72, 0.3), this.bodyMat)
     tm.castShadow = true
@@ -89,13 +107,13 @@ export class Enemy {
     hm.castShadow = true
     head.add(hm)
     head.position.set(0, 1.78, 0)
-    head.rotation.x = 0.18 // leicht gesenkt — sie „lauschen"
     this.group.add(head)
     const lArm = mk(0.14, 0.66, 0.16, -0.36, 1.55, 0)
     const rArm = mk(0.14, 0.66, 0.16, 0.36, 1.55, 0)
     const lLeg = mk(0.18, 0.9, 0.2, -0.15, 0.9, 0)
     const rLeg = mk(0.18, 0.9, 0.2, 0.15, 0.9, 0)
     this.parts = { lArm, rArm, lLeg, rLeg, torso, head }
+    this.group.position.copy(this.pos)
     scene.add(this.group)
   }
 
@@ -103,7 +121,12 @@ export class Enemy {
     return (x: number, y: number): boolean => {
       const c = cellAt(x, y)
       if (c === Cell.Wall) return true
-      if (c === Cell.Door) return doors.solidFor(x, y, true)
+      if (c === Cell.Door) {
+        const d = doors.atTile(x, y)
+        if (!d) return true
+        if (d.jammed) return this.state !== 'chase' // im Chase rammen sie den Keil
+        return !d.enemyCanPass
+      }
       return false
     }
   }
@@ -111,12 +134,11 @@ export class Enemy {
   private blocksSight(doors: DoorRegistry) {
     return (x: number, y: number): boolean => {
       const c = cellAt(x, y)
-      if (c === Cell.Wall) return true
       if (c === Cell.Door) {
         const d = doors.atTile(x, y)
         return d ? d.blocksSight : true
       }
-      return false
+      return c === Cell.Wall
     }
   }
 
@@ -129,12 +151,15 @@ export class Enemy {
     return true
   }
 
-  /** Sieht die Gestalt den Spieler? Glühen erhöht die Reichweite massiv. */
-  private canSee(player: Player, doors: DoorRegistry): { sees: boolean; dist: number } {
+  /** Sieht die Gestalt den Spieler? Glühen + Raumlicht bestimmen die Reichweite. */
+  private canSee(ctx: EnemyCtx): { sees: boolean; dist: number } {
+    const player = ctx.player
     const dx = player.pos.x - this.pos.x
     const dz = player.pos.z - this.pos.z
     const dist = Math.hypot(dx, dz)
-    let range = 7 + player.stability * 12
+    const pt = worldToTile(player.pos.x, player.pos.z)
+    const ambient = ctx.lightAt(pt.x, pt.y)
+    let range = 3.5 + ambient * 5 + player.lightOutput * 12
     if (player.crouching) range *= 0.65
     if (this.state === 'chase') range *= 1.35
     if (dist > range) return { sees: false, dist }
@@ -145,33 +170,62 @@ export class Enemy {
     const fov = this.state === 'chase' ? 1.5 : 0.95 // Halbwinkel rad
     if (Math.abs(diff) > fov && dist > 1.6) return { sees: false, dist }
     const me = worldToTile(this.pos.x, this.pos.z)
-    const pt = worldToTile(player.pos.x, player.pos.z)
-    const clear = losClear(me.x, me.y, pt.x, pt.y, this.blocksSight(doors))
+    const clear = losClear(me.x, me.y, pt.x, pt.y, this.blocksSight(ctx.doors))
     return { sees: clear, dist }
   }
 
-  update(
-    dt: number,
-    player: Player,
-    doors: DoorRegistry,
-    noises: NoiseEvent[],
-    lastNoiseCheck: { t: number },
-    onSpotted: () => void,
-    onCaught: () => void,
-    convergePing: THREE.Vector3 | null,
-  ): void {
+  /** Weckbedingungen für den Schläfer im Nest. */
+  private checkWake(ctx: EnemyCtx): boolean {
+    const player = ctx.player
+    const dist = Math.hypot(player.pos.x - this.pos.x, player.pos.z - this.pos.z)
+    if (dist < 2.2 && !player.dead) return true
+    for (const n of ctx.noises) {
+      if (Math.hypot(n.x - this.pos.x, n.z - this.pos.z) < n.radius) return true
+    }
+    // dein Licht weckt ihn
+    if (player.lightOutput > 0.55 && dist < 6) {
+      const me = worldToTile(this.pos.x, this.pos.z)
+      const pt = worldToTile(player.pos.x, player.pos.z)
+      if (losClear(me.x, me.y, pt.x, pt.y, this.blocksSight(ctx.doors))) return true
+    }
+    if (ctx.convergePing) return true
+    return false
+  }
+
+  update(dt: number, ctx: EnemyCtx): void {
     if (!this.alive) return
     this.animT += dt
 
+    // --- Schläfer ---
+    if (this.dormant) {
+      // kauernd, kaum Bewegung — er atmet
+      this.parts.torso.rotation.x = -1.05
+      this.parts.head.rotation.x = 0.5
+      this.parts.lLeg.rotation.x = -1.4
+      this.parts.rLeg.rotation.x = -1.4
+      this.group.position.set(this.pos.x, -0.62 + Math.sin(this.animT * 0.9) * 0.015, this.pos.z)
+      if (this.checkWake(ctx)) {
+        this.dormant = false
+        sfxSting()
+        this.state = 'investigate'
+        this.noiseTarget = { x: ctx.player.pos.x, z: ctx.player.pos.z }
+        this.lookT = 4
+      }
+      return
+    }
+
+    const player = ctx.player
+    const doors = ctx.doors
+
     // --- Wahrnehmung ---
-    const vis = this.canSee(player, doors)
+    const vis = this.canSee(ctx)
     if (vis.sees && !player.dead) {
       const rate = vis.dist < 4 ? 4 : vis.dist < 9 ? 1.6 : 0.8
       this.detection = Math.min(1, this.detection + dt * rate)
       if (this.detection >= 1 && this.state !== 'chase') {
         this.state = 'chase'
         sfxSting()
-        onSpotted()
+        ctx.onSpotted()
       }
       if (this.state === 'chase') {
         this.lastSeen.copy(player.pos)
@@ -191,8 +245,7 @@ export class Enemy {
 
     // Geräusche (nicht im Chase — da zählt nur die Spur)
     if (this.state !== 'chase') {
-      for (const n of noises) {
-        if (n.time <= lastNoiseCheck.t) continue
+      for (const n of ctx.noises) {
         const d = Math.hypot(n.x - this.pos.x, n.z - this.pos.z)
         if (d < n.radius) {
           this.state = 'investigate'
@@ -204,17 +257,19 @@ export class Enemy {
     }
 
     // Endspiel: Die Direktorin funkt allen die Position
-    if (convergePing && this.state !== 'chase') {
+    if (ctx.convergePing && this.state !== 'chase') {
       this.state = 'chase'
-      this.lastSeen.copy(convergePing)
+      this.lastSeen.copy(ctx.convergePing)
     }
-    if (convergePing && this.state === 'chase' && !vis.sees) {
-      this.lastSeen.copy(convergePing)
+    if (ctx.convergePing && this.state === 'chase' && !vis.sees) {
+      this.lastSeen.copy(ctx.convergePing)
       this.loseT = 0
     }
 
     // --- Verhalten ---
-    const speed = this.state === 'chase' ? 4.5 : this.state === 'investigate' ? 2.3 : 1.3
+    const speed = this.state === 'chase' ? 4.5
+      : this.state === 'investigate' ? 2.3 + ctx.alert * 0.15
+      : 1.3 + ctx.alert * 0.2
     this.repathT -= dt
 
     if (this.state === 'chase') {
@@ -224,7 +279,7 @@ export class Enemy {
         this.repathT = 0.6
       }
       if (Math.hypot(player.pos.x - this.pos.x, player.pos.z - this.pos.z) < 1.05 && !player.dead) {
-        onCaught()
+        ctx.onCaught()
       }
     } else if (this.state === 'investigate') {
       if (this.noiseTarget) {
@@ -244,12 +299,12 @@ export class Enemy {
         if (this.lookT <= 0) this.state = 'patrol'
       }
     } else {
-      // Patrouille: zufällige erreichbare Ziele
+      // Patrouille: zufällige erreichbare Ziele — Alarmstufe weitet den Radius
       if (this.pathI >= this.path.length) {
         this.idleT -= dt
         if (this.idleT <= 0) {
           const me = worldToTile(this.pos.x, this.pos.z)
-          const tgt = randomFloorNear(me.x, me.y, 9, this.blocked(doors), this.rng)
+          const tgt = randomFloorNear(me.x, me.y, 9 + ctx.alert * 2, this.blocked(doors), this.rng)
           if (tgt) this.setPathTo(tgt.x, tgt.y, doors)
           this.idleT = 2 + this.rng() * 4
         }
@@ -258,6 +313,7 @@ export class Enemy {
 
     // --- Bewegung entlang des Pfads ---
     let moving = false
+    let bashing = false
     if (this.pathI < this.path.length) {
       const node = this.path[this.pathI]
       const w = tileToWorld(node.x, node.y)
@@ -268,16 +324,29 @@ export class Enemy {
       } else {
         const door = doors.atTile(node.x, node.y)
         if (door && !door.isPassable) {
-          if (door.enemyCanPass) {
+          if (door.jammed && this.state === 'chase' && d < 2.0) {
+            // Er rammt den Keil. Wieder und wieder.
+            bashing = true
+            this.loseT = 0 // er vergisst dich nicht, nur weil eine Tür dazwischen ist
+            this.bashSfxT -= dt
+            if (this.bashSfxT <= 0) {
+              this.bashSfxT = 0.85
+              sfxBash()
+              ctx.emitNoise({ x: door.cx, z: door.cz, radius: 10, time: performance.now() / 1000 })
+            }
+            if (door.bash(dt)) {
+              sfxJamBreak()
+              ctx.emitNoise({ x: door.cx, z: door.cz, radius: 14, time: performance.now() / 1000 })
+            }
+          } else if (door.enemyCanPass) {
             if (d < 2.2) door.forceOpen() // Türen zischen für sie auf
-            if (door.openT < 0.6) { moving = false } // kurz warten
-            else {
+            if (door.openT >= 0.6) {
               this.pos.x += (dx / d) * speed * dt
               this.pos.z += (dz / d) * speed * dt
               moving = true
             }
           } else {
-            this.path = [] // versiegelt: neu planen
+            this.path = [] // versiegelt/verkeilt: neu planen
             this.repathT = 0
           }
         } else {
@@ -285,7 +354,7 @@ export class Enemy {
           this.pos.z += (dz / d) * speed * dt
           moving = true
         }
-        if (moving) {
+        if (moving || bashing) {
           // Heading-Konvention wie Spieler-Yaw: Blickrichtung = (-sin h, -cos h)
           const want = Math.atan2(-dx, -dz)
           let diff = want - this.heading
@@ -299,11 +368,13 @@ export class Enemy {
     // --- Pose & Material ---
     this.group.position.copy(this.pos)
     this.group.rotation.y = this.heading
-    const swing = moving ? Math.sin(this.animT * speed * 2.4) * 0.55 : Math.sin(this.animT * 1.3) * 0.06
-    this.parts.lLeg.rotation.x = swing
-    this.parts.rLeg.rotation.x = -swing
-    this.parts.lArm.rotation.x = -swing * 0.7
-    this.parts.rArm.rotation.x = swing * 0.7
+    const swing = bashing ? Math.sin(this.animT * 11) * 0.8
+      : moving ? Math.sin(this.animT * speed * 2.4) * 0.55
+      : Math.sin(this.animT * 1.3) * 0.06
+    this.parts.lLeg.rotation.x = bashing ? 0 : swing
+    this.parts.rLeg.rotation.x = bashing ? 0 : -swing
+    this.parts.lArm.rotation.x = bashing ? -1.2 + swing * 0.5 : -swing * 0.7
+    this.parts.rArm.rotation.x = bashing ? -1.2 - swing * 0.5 : swing * 0.7
     this.parts.torso.rotation.x = this.state === 'chase' ? -0.32 : -0.06
     this.parts.head.rotation.x = this.state === 'chase' ? 0.1 : -0.18
     // Im Chase glühen die Adern — sie wollen die Substanz
@@ -314,6 +385,7 @@ export class Enemy {
 
   /** 0..1 wie nah die Entdeckung ist — fürs HUD. */
   get threat(): number {
+    if (this.dormant) return 0
     return this.state === 'chase' ? 1 : this.detection
   }
 }
