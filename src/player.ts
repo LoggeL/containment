@@ -31,11 +31,16 @@ export class Player {
   private bobT = 0
   private stepT = 0
   private keys = new Set<string>()
+  private crouchToggle = false
 
   constructor(camera: THREE.PerspectiveCamera, glow: THREE.PointLight) {
     this.camera = camera
     this.glow = glow
-    document.addEventListener('keydown', (e) => this.keys.add(e.code))
+    document.addEventListener('keydown', (e) => {
+      this.keys.add(e.code)
+      // Toggle statt Strg-Halten — Strg+W schliesst sonst den Tab
+      if (e.code === 'KeyC' && !e.repeat) this.crouchToggle = !this.crouchToggle
+    })
     document.addEventListener('keyup', (e) => this.keys.delete(e.code))
     window.addEventListener('blur', () => this.keys.clear())
   }
@@ -84,7 +89,7 @@ export class Player {
 
   update(dt: number, doors: DoorRegistry, locked: boolean, emitNoise: (n: NoiseEvent) => void): void {
     if (this.dead) return
-    this.crouching = this.keys.has('ControlLeft') || this.keys.has('KeyC')
+    this.crouching = this.crouchToggle
     this.running = (this.keys.has('ShiftLeft') || this.keys.has('ShiftRight')) && !this.crouching
 
     let ix = 0, iz = 0
